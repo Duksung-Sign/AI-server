@@ -128,3 +128,8 @@ celerybeat.pid
 
 # Environments
 .env
+
+# .gitignore에 추가
+*.pt
+*.pth
+*.npy  # 학습용 데이터도 제외 추천
