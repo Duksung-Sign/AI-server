@@ -1,16 +1,20 @@
-from fastapi import FastAPI
+# main.py
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
+import os
 import numpy as np
-import torch
-from transformer_ctc_model import TransformerCTC  # ✅ CTC 모델로 변경
+import tensorflow as tf
 
-# === FastAPI 앱 생성 ===
-app = FastAPI()
+# === FastAPI 앱 ===
+app = FastAPI(title="Keras LSTM Sign API (244D)",
+              description="입력 시퀀스(30x244)를 받아 LSTM(.h5) 모델로 예측합니다.",
+              version="1.0.0")
 
-# === 하이퍼파라미터 및 클래스 정의 ===
+# ================== 고정 상수 (244D 스키마) ==================
 SEQ_LEN = 30
-INPUT_DIM = 244
+FEATURE_DIM = 244
 
+# === 클래스 순서 (실시간 코드와 동일) ===
 CLASS_NAMES = [
     "thx",         # 0
     "study",       # 1
@@ -19,68 +23,107 @@ CLASS_NAMES = [
     "you",         # 4
     "arrive",      # 5
     "nicetomeet",  # 6
-    "none",        # 7
-    "hate",        # 8
-    "hello",       # 9
-    "call",        # 10
-    "goodnice",    # 11
-    "sorry"        # 12
+    "love",        # 7
+    "none",        # 8
+    "hate",        # 9
+    "hello",       # 10
+    "call",        # 11
+    "goodnice",    # 12
+    "sorry"        # 13
 ]
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# === 환경변수로 경로/키 오버라이드 가능 ===
+MODEL_PATH = os.getenv("MODEL_PATH", "model/20250902_ver01.h5")
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "secret")  # /reload 보호용(선택)
 
-# === 모델 경로 및 로드 ===
-MODEL_PATH = "model/250904_best_ctc_transformer_244.pt"
+# === 모델 로드 ===
+model = None
+def load_model():
+    global model
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"MODEL_PATH not found: {MODEL_PATH}")
+    model = tf.keras.models.load_model(MODEL_PATH)
+    # warm-up (옵션)
+    _ = model.predict(np.zeros((1, SEQ_LEN, FEATURE_DIM), dtype=np.float32), verbose=0)
 
-model = TransformerCTC(input_dim=INPUT_DIM, num_classes=len(CLASS_NAMES), num_layers=6).to(DEVICE)
-checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
+def ensure_model():
+    if model is None:
+        load_model()
 
-# === 입력 데이터 스키마 정의 ===
+# === 입력 데이터 스키마 ===
 class InputData(BaseModel):
-    sequence: list[list[float]]  # (30, 244) 형태
+    sequence: list[list[float]]  # (T, 244). 보통 T=30
 
-# === 루트 라우트 ===
+# === 유틸: 길이 보정(선택) ===
+def temporal_interpolate(seq_np: np.ndarray, target_len: int = SEQ_LEN) -> np.ndarray:
+    """(T, D)->(target_len, D) 선형보간. T가 30이 아닐 때만 사용."""
+    T, D = seq_np.shape
+    if T == target_len:
+        return seq_np
+    x_old = np.linspace(0.0, 1.0, T)
+    x_new = np.linspace(0.0, 1.0, target_len)
+    out = np.empty((target_len, D), dtype=np.float32)
+    for d in range(D):
+        out[:, d] = np.interp(x_new, x_old, seq_np[:, d])
+    return out
+
+# === 라우트 ===
+@app.on_event("startup")
+def _startup():
+    load_model()
+
 @app.get("/")
-async def root():
-    return {"message": "✅ 244D CTC Transformer Sign Language API is running!"}
+def root():
+    return {"message": "✅ Keras LSTM Sign API is running!", "model_path": MODEL_PATH}
 
-# === 테스트 라우트 ===
 @app.post("/test")
 async def test(data: dict):
     return {"received": data, "message": "Test successful!"}
 
-# === 예측 라우트 ===
-@app.post("/predict",
-          summary="수어 예측 (244차원, CTC 모델)",
-          description="30프레임, 244차원 시퀀스를 입력받아 수어 클래스 예측 결과를 반환합니다.")
-async def predict(data: InputData):
+@app.get("/health")
+def health():
     try:
-        input_array = np.array(data.sequence, dtype=np.float32)
+        ensure_model()
+        return {"ok": True, "classes": len(CLASS_NAMES)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-        if input_array.shape != (SEQ_LEN, INPUT_DIM):
-            return {"error": f"❌ 입력 차원 오류: ({SEQ_LEN}, {INPUT_DIM}) 이어야 합니다. 현재: {input_array.shape}"}
+@app.post("/reload")
+def reload_model(x_api_key: str = Header(None)):
+    if x_api_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    load_model()
+    return {"reloaded": True, "model_path": MODEL_PATH}
 
-        # === 모델 입력 형태로 변환
-        input_tensor = torch.tensor(input_array, dtype=torch.float32).unsqueeze(0).to(DEVICE)  # (1, 30, 244)
+@app.post("/predict",
+          summary="수어 예측 (244D, LSTM .h5)",
+          description="T프레임(일반적으로 30), 244차원 시퀀스를 입력받아 확률과 예측 라벨을 반환합니다.")
+def predict(data: InputData):
+    try:
+        # 입력 → np
+        arr = np.asarray(data.sequence, dtype=np.float32)  # (T, 244)
+        if arr.ndim != 2 or arr.shape[1] != FEATURE_DIM:
+            return {"error": f"❌ 입력 차원 오류: (*, {FEATURE_DIM})이어야 합니다. 현재: {arr.shape}"}
 
-        # === 예측
-        with torch.no_grad():
-            output = model(input_tensor)  # (1, 30, num_classes + 1)
-            probs = torch.softmax(output, dim=2)[0].cpu().numpy()  # (30, 14)
+        # 길이 보정(선택): T!=30인 경우 선형보간으로 30으로 맞춤
+        if arr.shape[0] != SEQ_LEN:
+            arr = temporal_interpolate(arr, target_len=SEQ_LEN)
 
-        # === CTC 평균 확률 기반 예측 (blank 제외)
-        avg_probs = probs.mean(axis=0)  # (14,)
-        pred_idx = int(np.argmax(avg_probs[:len(CLASS_NAMES)]))  # blank 제외
+        # 배치 차원 추가
+        x = np.expand_dims(arr, axis=0)  # (1, 30, 244)
+
+        ensure_model()
+        probs = model.predict(x, verbose=0)[0]  # (num_classes,)
+        probs = probs.astype(np.float32)
+
+        pred_idx = int(np.argmax(probs))
         predicted_label = CLASS_NAMES[pred_idx]
-        probabilities = dict(zip(CLASS_NAMES, avg_probs[:len(CLASS_NAMES)].tolist()))
+        probabilities = {cls: float(p) for cls, p in zip(CLASS_NAMES, probs.tolist())}
 
         return {
             "prediction": predicted_label,
             "probabilities": probabilities
         }
-
     except Exception as e:
         return {"error": str(e)}
 
