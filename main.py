@@ -23,8 +23,8 @@ CLASS_NAMES = [
     "you",         # 4
     "arrive",      # 5
     "nicetomeet",  # 6
-    "love",        # 7
-    "none",        # 8
+    "none",        # 7
+    "love",        # 8
     "hate",        # 9
     "hello",       # 10
     "call",        # 11
