@@ -11,3 +11,5 @@ h5py>=3.8
 
 # 입력 검증
 pydantic==1.10.9
+
+gunicorn==21.2.0
