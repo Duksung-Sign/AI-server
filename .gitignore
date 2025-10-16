@@ -139,3 +139,5 @@ celerybeat.pid
 *.pt
 model/
 .idea
+myenv/
+venv/
