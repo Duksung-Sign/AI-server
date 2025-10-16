@@ -138,3 +138,4 @@ celerybeat.pid
 *.npy
 *.pt
 model/
+.idea
