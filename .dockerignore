@@ -2,6 +2,7 @@
 
 # 가상 환경 폴더 제외
 myenv/
+venv/
 
 # Git 폴더 제외
 .git/
