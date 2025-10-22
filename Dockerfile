@@ -16,5 +16,5 @@ COPY . .
 # 5. 서버 실행 (8000번 포트 개방)
 EXPOSE 8000
 
-# 6. Gunicorn 명령어로 서버 실행
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main_ws:app", "-b", "0.0.0.0:8000"]
+# ✅ Uvicorn 직접 실행 명령어로 변경 (이 줄을 추가)
+CMD ["uvicorn", "main_ws:app", "--host", "0.0.0.0", "--port", "8000"]
