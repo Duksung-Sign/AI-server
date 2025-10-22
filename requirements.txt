@@ -1,6 +1,6 @@
 ﻿# 서버 프레임워크
 fastapi==0.95.2
-uvicorn==0.22.0
+uvicorn[standard]==0.22.0
 
 # 머신러닝 및 수치계산
 ## torch==2.0.1
