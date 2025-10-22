@@ -16,5 +16,5 @@ COPY . .
 # 5. 서버 실행 (8000번 포트 개방)
 EXPOSE 8000
 
-# ✅ "--factory" 옵션 사용 명령어로 변경
-CMD ["uvicorn", "--factory", "main_ws:app", "--host", "0.0.0.0", "--port", "8000"]
+# ✅ 원래 Uvicorn 직접 실행 명령어로 복구 (이 줄 추가)
+CMD ["uvicorn", "main_ws:app", "--host", "0.0.0.0", "--port", "8000"]
