@@ -114,6 +114,10 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
+
+
+
+
             frame = data.get("frame")
 
             if not isinstance(frame, list) or len(frame) != NUM_FEATURES:
@@ -128,6 +132,15 @@ async def websocket_endpoint(websocket: WebSocket):
             if len(buffer) == SEQ_LEN:
                 # 1. Deque를 리스트로 변환 후 NumPy 배열 생성
                 sequence = np.array(list(buffer), dtype=np.float32)
+
+                # ▼▼▼▼▼ 디버그 코드 (매 예측 시 최신 프레임 출력) ▼▼▼▼▼
+                raw_from_unity = sequence[-1]  # Unity가 보낸 최신 프레임
+                print("\n" + "=" * 30)
+                print(">>> [SERVER: RAW 276] (스케일러 적용 전) <<<")
+                print(raw_from_unity.tolist())
+                print("=" * 30 + "\n")
+                # ▲▲▲▲▲ 디버그 코드 ▲▲▲▲▲
+
 
                 # 2. 스케일러 적용 (중요!)
                 # (SEQ_LEN, NUM_FEATURES) -> (SEQ_LEN * NUM_FEATURES,) 1D 배열로 변환 불필요
