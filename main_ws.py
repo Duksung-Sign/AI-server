@@ -147,7 +147,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 sequence = np.array(list(buffer), dtype=np.float32)
                 x = np.expand_dims(sequence, axis=0)
 
+                # 🔹 Unity에서 보낸 실제 입력 저장 (분포 검증용)
+                np.save("unity_input_sample.npy", sequence)
+                print("✅ Unity 입력 샘플 저장 완료! shape:", sequence.shape)
+
                 probs = model.predict(x, verbose=0)[0]
+
                 pred_idx = int(np.argmax(probs))
                 predicted_label = CLASS_NAMES[pred_idx]
                 probabilities = {cls: float(p)
@@ -170,4 +175,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # === 로컬 실행 ===
 if __name__ == "__main__":
-    uvicorn.run("main_ws_276:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main_ws:app", host="0.0.0.0", port=8000, reload=True)
