@@ -1,95 +1,67 @@
-# main_ws.py (최종본)
-
 import os
 import numpy as np
 import uvicorn
 from collections import deque
-from typing import Dict, List
-
-# FastAPI 관련
+from typing import Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-
-# Keras 모델 구조를 만들기 위한 라이브러리
 import tensorflow as tf
-from tensorflow.keras import layers as L, models as M
+# from tensorflow.keras import layers as L, models as M  # <-- 더 이상 필요 없음
+import joblib
 
-# === FastAPI 앱 ===
-app = FastAPI(title="Keras LSTM Sign API (WebSocket, 최종)",
-              description="웹소켓으로 실시간 시퀀스를 받아 Keras 모델로 예측합니다.",
-              version="3.0.0")
+# === FastAPI 앱 설정 ===
+app = FastAPI(
+    title="Sign Language LSTM API (276D, WebSocket)",
+    description="Unity에서 276차원 원본 프레임을 받아 LSTM 모델로 예측합니다.",
+    version="5.0.1"  # 버전 업데이트
+)
 
-# ================== 모델 설정 (학습 코드와 동일하게 맞춤) ==================
+# === 모델 및 데이터 설정 ===
 SEQ_LEN = 30
-NUM_FEATURES = 244
-NUM_CLASSES = 14
+NUM_FEATURES = 276
+NUM_CLASSES = 13
+MODEL_PATH = os.getenv("MODEL_PATH", "model/20251025_ver05_best_lstm_276.h5")
+SCALER_PATH = os.getenv("SCALER_PATH", "scaler_276.pkl")
 
-# 모델이 학습한 클래스 순서 (14개)
 CLASS_NAMES = [
-    "thx", "study", "okay", "me", "you", "arrive", "nicetomeet",
-    "none", "love", "hate", "hello", "call", "goodnice", "sorry"
+    "thx", "study", "okay", "me", "you", "arrive", "ntmu",
+    "none", "dislike", "hello", "call", "like", "sorry"
 ]
 
-# === 환경변수 및 모델 경로 ===
-MODEL_PATH = os.getenv("MODEL_PATH", "model/20250902_ver01.h5")
-
-# === 모델 로드 함수 (최종 수정본) ===
 model = None
+scaler = None
 
 
+# === 모델 로드 (수정된 부분) ===
 def load_model():
+    """
+    .h5 파일에서 모델 구조와 가중치를 한 번에 로드합니다.
+    """
     global model
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(f"MODEL_PATH not found: {MODEL_PATH}")
 
-    # --- 친구의 모델 구조 코드 ---
-    def Inception1D(x, filters=64):
-        b3 = L.Conv1D(filters, 3, padding='same', activation='relu')(x)
-        b5 = L.Conv1D(filters, 5, padding='same', activation='relu')(x)
-        b7 = L.Conv1D(filters, 7, padding='same', activation='relu')(x)
-        z = L.Concatenate()([b3, b5, b7])
-        z = L.LayerNormalization()(z)
-        z = L.Dropout(0.15)(z)
-        z = L.Conv1D(filters, 1, padding='same', activation='relu')(z)
-        se = L.GlobalAveragePooling1D()(z)
-        se = L.Dense(filters // 2, activation='relu')(se)
-        se = L.Dense(filters, activation='sigmoid')(se)
-        se = L.Multiply()([z, L.Reshape((1, filters))(se)])
-        skip = L.Conv1D(filters, 1, padding='same')(x)
-        out = L.Add()([se, skip])
-        return out
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # 기존의 Inception1D, DilatedBlock 등 복잡한 구조 정의를 모두 삭제하고
+    # 로컬 테스트 코드와 동일하게 load_model을 사용합니다.
+    try:
+        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+    except Exception as e:
+        print(f"❌ 모델 로드 중 심각한 오류 발생: {e}")
+        print("모델 .h5 파일이 구조를 포함하여 저장되었는지 확인하세요.")
+        raise e
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-    def DilatedBlock(x, filters=64, dilation=2):
-        z = L.Conv1D(filters, 3, padding='same', dilation_rate=dilation, activation='relu')(x)
-        z = L.LayerNormalization()(z)
-        z = L.Dropout(0.15)(z)
-        if x.shape[-1] != filters:
-            x = L.Conv1D(filters, 1, padding='same')(x)
-        return L.Add()([x, z])
-
-    inp = L.Input(shape=(SEQ_LEN, NUM_FEATURES))
-    x = Inception1D(inp, filters=64)
-    x = DilatedBlock(x, filters=64, dilation=2)
-    x = DilatedBlock(x, filters=64, dilation=4)
-    x = L.Bidirectional(L.LSTM(128, return_sequences=True))(x)
-    x = L.Dropout(0.3)(x)
-    x = L.Bidirectional(L.LSTM(64))(x)
-    x = L.LayerNormalization()(x)
-    x = L.Dense(96, activation='relu')(x)
-    x = L.Dropout(0.5)(x)
-    out = L.Dense(NUM_CLASSES, activation='softmax')(x)
-
-    model = M.Model(inp, out)
-    # --- 모델 구조 정의 끝 ---
-
-    # 구조가 아닌 가중치(weights)만 불러옵니다.
-    model.load_weights(MODEL_PATH)
-
-    # warm-up
-    _ = model.predict(np.zeros((1, SEQ_LEN, NUM_FEATURES), dtype=np.float32), verbose=0)
-    print("✅ 모델 로딩 및 준비 완료!")
+    # Warm-up (모델이 로드되었는지 확인)
+    try:
+        _ = model.predict(np.zeros((1, SEQ_LEN, NUM_FEATURES),
+                                   dtype=np.float32), verbose=0)
+        print(f"✅ LSTM(276D) 모델 로드 및 워밍업 완료: {MODEL_PATH}")
+    except Exception as e:
+        print(f"❌ 모델 워밍업 실패. 입력 shape({SEQ_LEN}, {NUM_FEATURES})가 모델과 맞는지 확인하세요. 오류: {e}")
+        raise e
 
 
-# === 웹소켓 연결 관리 ===
+# === WebSocket 연결 관리 ===
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[WebSocket, deque] = {}
@@ -100,8 +72,9 @@ class ConnectionManager:
         print(f"새 클라이언트 연결: {websocket.client}")
 
     def disconnect(self, websocket: WebSocket):
-        del self.active_connections[websocket]
-        print(f"클라이언트 연결 종료: {websocket.client}")
+        if websocket in self.active_connections:
+            del self.active_connections[websocket]
+            print(f"클라이언트 연결 종료: {websocket.client}")
 
     def add_frame(self, websocket: WebSocket, frame_data: list):
         if websocket in self.active_connections:
@@ -114,59 +87,94 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# === FastAPI 라우트 ===
+# === 서버 시작 시 모델 & 스케일러 로드 ===
 @app.on_event("startup")
 def _startup():
-    load_model()
+    global scaler
+    load_model()  # 수정된 함수 호출
+    if not os.path.exists(SCALER_PATH):
+        raise FileNotFoundError(f"SCALER_PATH not found: {SCALER_PATH}")
+    scaler = joblib.load(SCALER_PATH)
+    print(f"✅ StandardScaler 로드 완료: {SCALER_PATH}")
 
 
 @app.get("/")
 def root():
-    return {"message": "✅ Keras LSTM Sign API (WebSocket) is running!", "model_path": MODEL_PATH}
+    return {"message": "✅ 276D LSTM Sign API running",
+            "model_path": MODEL_PATH,
+            "scaler_path": SCALER_PATH,
+            "expected_input_dim": NUM_FEATURES,
+            "seq_len": SEQ_LEN}
 
 
+# === WebSocket 엔드포인트 ===
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-
     try:
         while True:
             data = await websocket.receive_json()
-            frame = data.get('frame')
+
+
+
+
+            frame = data.get("frame")
 
             if not isinstance(frame, list) or len(frame) != NUM_FEATURES:
-                await websocket.send_json({"error": f"Invalid frame dimension. Expected {NUM_FEATURES}"})
+                await websocket.send_json(
+                    {"error": f"Invalid frame dimension. Expected {NUM_FEATURES}, got {len(frame)}"}
+                )
                 continue
 
             manager.add_frame(websocket, frame)
             buffer = manager.get_buffer(websocket)
 
             if len(buffer) == SEQ_LEN:
+                # 1. Deque를 리스트로 변환 후 NumPy 배열 생성
                 sequence = np.array(list(buffer), dtype=np.float32)
-                x = np.expand_dims(sequence, axis=0)
 
+                # ▼▼▼▼▼ 디버그 코드 (매 예측 시 최신 프레임 출력) ▼▼▼▼▼
+                raw_from_unity = sequence[-1]  # Unity가 보낸 최신 프레임
+                print("\n" + "=" * 30)
+                print(">>> [SERVER: RAW 276] (스케일러 적용 전) <<<")
+                print(raw_from_unity.tolist())
+                print("=" * 30 + "\n")
+                # ▲▲▲▲▲ 디버그 코드 ▲▲▲▲▲
+
+
+                # 2. 스케일러 적용 (중요!)
+                # (SEQ_LEN, NUM_FEATURES) -> (SEQ_LEN * NUM_FEATURES,) 1D 배열로 변환 불필요
+                # .transform()은 2D 배열을 기대함
+                sequence_scaled = scaler.transform(sequence)  # (30, 276) 형태 그대로 변환
+
+                # 3. 모델 입력 형태로 변경
+                # (30, 276) -> (1, 30, 276)
+                x = np.expand_dims(sequence_scaled, axis=0)
+
+                # 4. 예측
                 probs = model.predict(x, verbose=0)[0]
 
                 pred_idx = int(np.argmax(probs))
                 predicted_label = CLASS_NAMES[pred_idx]
-                probabilities = {cls: float(p) for cls, p in zip(CLASS_NAMES, probs.tolist())}
+                probabilities = {cls: float(p)
+                                 for cls, p in zip(CLASS_NAMES, probs.tolist())}
 
                 await websocket.send_json({
                     "prediction": predicted_label,
                     "probabilities": probabilities
                 })
 
-                # --- ❗️ 슬라이딩 윈도우 적용 부분 ❗️ ---
-                # 가장 오래된 프레임 하나를 버려서 버퍼를 한 칸씩 이동시킴
+                # 슬라이딩 윈도우: 가장 오래된 프레임 제거
                 buffer.popleft()
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        print(f"오류 발생: {e}")
+        print(f"⚠️ 예측 중 오류 발생: {e}")
         manager.disconnect(websocket)
 
 
 # === 로컬 실행 ===
 if __name__ == "__main__":
-    uvicorn.run("main_ws:app", host="0.0.0.0", port=8000, reload=True)
+    # main_ws_276.py 파일이므로 "main_ws_276:app"이 맞습니다.
+    uvicorn.run("main_ws_276:app", host="0.0.0.0", port=8000, reload=True)
