@@ -30,7 +30,7 @@ CLASS_NAMES = [
 ]
 
 # === 환경변수 및 모델 경로 ===
-MODEL_PATH = os.getenv("MODEL_PATH", "model/20250902_ver01.h5")
+MODEL_PATH = os.getenv("MODEL_PATH", "model/20251010_ver0001.h5")
 
 # === 모델 로드 함수 (최종 수정본) ===
 model = None
