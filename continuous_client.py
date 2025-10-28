@@ -9,7 +9,7 @@ import time
 # --- 서버 설정 ---
 SEQ_LEN = 30
 FEATURE_DIM = 244
-SERVER_URL = "ws://localhost:8000/ws"
+SERVER_URL = "ws://54.180.108.68:8000/ws"
 FRAME_RATE = 1/30  # 50ms마다 프레임 생성 (초당 20프레임)
 # ------------------
 
