@@ -19,8 +19,8 @@ app = FastAPI(
 SEQ_LEN = 30
 NUM_FEATURES = 276
 NUM_CLASSES = 13
-MODEL_PATH = os.getenv("MODEL_PATH", "model/20251025_ver05_best_lstm_276.h5")
-SCALER_PATH = os.getenv("SCALER_PATH", "scaler_276.pkl")
+MODEL_PATH = os.getenv("MODEL_PATH", "model/20251029_ver07_best_lstm_276.h5")
+SCALER_PATH = os.getenv("SCALER_PATH", "scaler_276_1029.pkl")
 
 CLASS_NAMES = [
     "thx", "study", "okay", "me", "you", "arrive", "ntmu",
