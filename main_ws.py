@@ -1,80 +1,107 @@
+# main_ws.py (최종본)
+
 import os
 import numpy as np
 import uvicorn
 from collections import deque
-from typing import Dict
+from typing import Dict, List
+
+# FastAPI 관련
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+# Keras 모델 구조를 만들기 위한 라이브러리
 import tensorflow as tf
-import joblib
+from tensorflow.keras import layers as L, models as M
 
-# === FastAPI 앱 설정 ===
-app = FastAPI(
-    title="Sign Language LSTM API (276D, WebSocket)",
-    description="Unity에서 276차원 원본 프레임을 받아 LSTM 모델로 예측합니다.",
-    version="6.0.0"  # 버전 업데이트
-)
+# === FastAPI 앱 ===
+app = FastAPI(title="Keras LSTM Sign API (WebSocket, 최종)",
+              description="웹소켓으로 실시간 시퀀스를 받아 Keras 모델로 예측합니다.",
+              version="3.0.0")
 
-# === 모델 및 데이터 설정 ===
+# ================== 모델 설정 (학습 코드와 동일하게 맞춤) ==================
 SEQ_LEN = 30
-NUM_FEATURES = 276
-NUM_CLASSES = 13  # ★ 1. 학습 스크립트와 클래스 개수 일치 (13개)
+NUM_FEATURES = 244
+NUM_CLASSES = 14
 
-# ★ 2. 학습 스크립트가 생성할 파일명과 일치시켜야 합니다.
-# 예: "model/20251030_276D_ver01_best_276d.h5" (학습 후 실제 파일명으로 변경)
-MODEL_PATH = os.getenv("MODEL_PATH", "model/20251030_276D_ver01_best_276d.h5")
-
-# ★ 학습 스크립트가 생성할 "scaler_276.pkl"
-SCALER_PATH = os.getenv("SCALER_PATH", "scaler_276_1030.pkl")
-
-# ★ 3. [가장 중요] 학습 스크립트의 'classes' 리스트와 순서/내용이 100% 일치해야 함
+# 모델이 학습한 클래스 순서 (14개)
 CLASS_NAMES = [
-    '감사합니다_flipped', '공부하다_flipped', '괜찮다_flipped', '나_flipped', '당신_flipped', '도착하다_flipped',
-    '반갑습니다_flipped', '비수어_flipped', '싫다_flipped', '안녕하세요_flipped', '연락해주세요_flipped',
-    '좋다멋지다_flipped', '죄송합니다_flipped'
+    "thx", "study", "okay", "me", "you", "arrive", "nicetomeet",
+    "none", "love", "hate", "hello", "call", "goodnice", "sorry"
 ]
 
+# === 환경변수 및 모델 경로 ===
+MODEL_PATH = os.getenv("MODEL_PATH", "model/20251010_ver0001.h5")
+
+# === 모델 로드 함수 (최종 수정본) ===
 model = None
-scaler = None
 
 
-# === 모델 로드 ===
 def load_model():
     global model
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(f"MODEL_PATH not found: {MODEL_PATH}")
 
-    try:
-        # compile=False가 .h5 로딩 시 더 빠르고 안정적입니다.
-        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-    except Exception as e:
-        print(f"❌ 모델 로드 중 심각한 오류 발생: {e}")
-        raise e
+    # --- 친구의 모델 구조 코드 ---
+    def Inception1D(x, filters=64):
+        b3 = L.Conv1D(filters, 3, padding='same', activation='relu')(x)
+        b5 = L.Conv1D(filters, 5, padding='same', activation='relu')(x)
+        b7 = L.Conv1D(filters, 7, padding='same', activation='relu')(x)
+        z = L.Concatenate()([b3, b5, b7])
+        z = L.LayerNormalization()(z)
+        z = L.Dropout(0.15)(z)
+        z = L.Conv1D(filters, 1, padding='same', activation='relu')(z)
+        se = L.GlobalAveragePooling1D()(z)
+        se = L.Dense(filters // 2, activation='relu')(se)
+        se = L.Dense(filters, activation='sigmoid')(se)
+        se = L.Multiply()([z, L.Reshape((1, filters))(se)])
+        skip = L.Conv1D(filters, 1, padding='same')(x)
+        out = L.Add()([se, skip])
+        return out
 
-    # Warm-up
-    try:
-        _ = model.predict(np.zeros((1, SEQ_LEN, NUM_FEATURES),
-                                   dtype=np.float32), verbose=0)
-        print(f"✅ LSTM(276D) 모델 로드 및 워밍업 완료: {MODEL_PATH}")
-    except Exception as e:
-        print(f"❌ 모델 워밍업 실패. 입력 shape({SEQ_LEN}, {NUM_FEATURES})가 모델과 맞는지 확인하세요. 오류: {e}")
-        raise e
+    def DilatedBlock(x, filters=64, dilation=2):
+        z = L.Conv1D(filters, 3, padding='same', dilation_rate=dilation, activation='relu')(x)
+        z = L.LayerNormalization()(z)
+        z = L.Dropout(0.15)(z)
+        if x.shape[-1] != filters:
+            x = L.Conv1D(filters, 1, padding='same')(x)
+        return L.Add()([x, z])
+
+    inp = L.Input(shape=(SEQ_LEN, NUM_FEATURES))
+    x = Inception1D(inp, filters=64)
+    x = DilatedBlock(x, filters=64, dilation=2)
+    x = DilatedBlock(x, filters=64, dilation=4)
+    x = L.Bidirectional(L.LSTM(128, return_sequences=True))(x)
+    x = L.Dropout(0.3)(x)
+    x = L.Bidirectional(L.LSTM(64))(x)
+    x = L.LayerNormalization()(x)
+    x = L.Dense(96, activation='relu')(x)
+    x = L.Dropout(0.5)(x)
+    out = L.Dense(NUM_CLASSES, activation='softmax')(x)
+
+    model = M.Model(inp, out)
+    # --- 모델 구조 정의 끝 ---
+
+    # 구조가 아닌 가중치(weights)만 불러옵니다.
+    model.load_weights(MODEL_PATH)
+
+    # warm-up
+    _ = model.predict(np.zeros((1, SEQ_LEN, NUM_FEATURES), dtype=np.float32), verbose=0)
+    print("✅ 모델 로딩 및 준비 완료!")
 
 
-# === WebSocket 연결 관리 ===
+# === 웹소켓 연결 관리 ===
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[WebSocket, deque] = {}
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        # deque(maxlen=SEQ_LEN)가 자동 슬라이딩 윈도우 역할을 합니다.
         self.active_connections[websocket] = deque(maxlen=SEQ_LEN)
         print(f"새 클라이언트 연결: {websocket.client}")
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            del self.active_connections[websocket]
-            print(f"클라이언트 연결 종료: {websocket.client}")
+        del self.active_connections[websocket]
+        print(f"클라이언트 연결 종료: {websocket.client}")
 
     def add_frame(self, websocket: WebSocket, frame_data: list):
         if websocket in self.active_connections:
@@ -87,87 +114,59 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# === 서버 시작 시 모델 & 스케일러 로드 ===
+# === FastAPI 라우트 ===
 @app.on_event("startup")
 def _startup():
-    global scaler
     load_model()
-    if not os.path.exists(SCALER_PATH):
-        raise FileNotFoundError(f"SCALER_PATH not found: {SCALER_PATH}")
-    scaler = joblib.load(SCALER_PATH)
-    print(f"✅ StandardScaler 로드 완료: {SCALER_PATH}")
 
 
 @app.get("/")
 def root():
-    return {"message": "✅ 276D LSTM Sign API running",
-            "model_path": MODEL_PATH,
-            "scaler_path": SCALER_PATH,
-            "expected_input_dim": NUM_FEATURES,
-            "seq_len": SEQ_LEN}
+    return {"message": "✅ Keras LSTM Sign API (WebSocket) is running!", "model_path": MODEL_PATH}
 
 
-# === WebSocket 엔드포인트 ===
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+
     try:
         while True:
             data = await websocket.receive_json()
-            frame = data.get("frame")
+            frame = data.get('frame')
 
             if not isinstance(frame, list) or len(frame) != NUM_FEATURES:
-                await websocket.send_json(
-                    {"error": f"Invalid frame dimension. Expected {NUM_FEATURES}, got {len(frame)}"}
-                )
+                await websocket.send_json({"error": f"Invalid frame dimension. Expected {NUM_FEATURES}"})
                 continue
 
-            # 1. 최신 프레임을 덱(deque)에 추가 (오래된 것은 자동 삭제됨)
             manager.add_frame(websocket, frame)
             buffer = manager.get_buffer(websocket)
 
-            # 2. 버퍼가 30개 찰 때까지 기다림
             if len(buffer) == SEQ_LEN:
-                # 3. (30, 276) 형태의 Raw 데이터 배열 생성
                 sequence = np.array(list(buffer), dtype=np.float32)
+                x = np.expand_dims(sequence, axis=0)
 
-                # 4. [핵심] 스케일러 적용
-                # (30, 276) -> (30, 276)
-                sequence_scaled = scaler.transform(sequence)
-
-                # 5. 모델 입력 형태로 변경
-                # (30, 276) -> (1, 30, 276)
-                x = np.expand_dims(sequence_scaled, axis=0)
-
-                # 6. 예측
                 probs = model.predict(x, verbose=0)[0]
 
                 pred_idx = int(np.argmax(probs))
                 predicted_label = CLASS_NAMES[pred_idx]
-                probabilities = {cls: float(p)
-                                 for cls, p in zip(CLASS_NAMES, probs.tolist())}
+                probabilities = {cls: float(p) for cls, p in zip(CLASS_NAMES, probs.tolist())}
 
                 await websocket.send_json({
                     "prediction": predicted_label,
                     "probabilities": probabilities
                 })
 
-                # ★ 4. [수정] 'popleft()' 제거 ★
-                # popleft()를 하면 30프레임마다 1번 예측하는 '텀블링 윈도우'가 됩니다.
-                # popleft()를 제거해야 매 프레임 예측하는 '슬라이딩 윈도우'가 됩니다.
-                # buffer.popleft() # <-- 이 줄 삭제
+                # --- ❗️ 슬라이딩 윈도우 적용 부분 ❗️ ---
+                # 가장 오래된 프레임 하나를 버려서 버퍼를 한 칸씩 이동시킴
+                buffer.popleft()
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        print(f"⚠️ 예측 중 오류 발생: {e}")
+        print(f"오류 발생: {e}")
         manager.disconnect(websocket)
 
 
 # === 로컬 실행 ===
 if __name__ == "__main__":
-    # 이 파일 이름을 'main_server_276.py' 등으로 저장했다면
-    # uvicorn.run("main_server_276:app", ...)
-
-    # 지금 파일명이 main_ws_276.py 라면
     uvicorn.run("main_ws:app", host="0.0.0.0", port=8000, reload=True)
