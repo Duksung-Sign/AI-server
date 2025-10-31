@@ -34,9 +34,8 @@ SEQ_LEN_276 = 30
 NUM_FEATURES_276 = 276
 NUM_CLASSES_276 = 13
 CLASS_NAMES_276 = [
-    '감사합니다_flipped', '공부하다_flipped', '괜찮다_flipped', '나_flipped', '당신_flipped', '도착하다_flipped',
-    '반갑습니다_flipped', '비수어_flipped', '싫다_flipped', '안녕하세요_flipped', '연락해주세요_flipped',
-    '좋다멋지다_flipped', '죄송합니다_flipped'
+    "thx", "study", "okay", "me", "you", "arrive", "nicetomeet",
+    "none",  "hate", "hello", "call", "goodnice", "sorry"
 ]
 # 환경변수 이름을 분리합니다.
 MODEL_PATH_276 = os.getenv("MODEL_PATH_276", "model/20251030_276D_ver01_best_276d.h5")
